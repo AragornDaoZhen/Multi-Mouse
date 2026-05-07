@@ -708,6 +708,9 @@ class MultiMouseManager:
     """
 
     def __init__(self, config: dict = None):
+        if config is None:
+            config = load_config()
+        self.config = config
 
         self.mice = {}
         self.primary_device = None

@@ -105,7 +105,7 @@ class SettingsPanel:
 
         # Secondary colors
         for i, color in enumerate(self.cfg.get("secondary_colors", [])):
-            self._add_color_row(frame, row, f"Secondary Mouse {i+1}", f"secondary_{i}", i=0)
+            self._add_color_row(frame, row, f"Secondary Mouse {i+1}", None, secondary_idx=i)
             row += 1
 
         # ---- Buttons ----
@@ -120,14 +120,16 @@ class SettingsPanel:
         if secondary_idx is not None:
             rgb = self.cfg["secondary_colors"][secondary_idx]
         else:
-            rgb = self.cfg.get("primary_color", [160, 160, 160])
+            rgb = self.cfg.get(key, [160, 160, 160])
 
         swatch = tk.Label(frame, text="   ", bg=rgb_to_hex(*rgb), relief="ridge", width=4)
         swatch.grid(row=row, column=1, sticky="w", pady=2)
 
         btn = ttk.Button(frame, text="Pick...", command=lambda k=key, idx=secondary_idx: self._pick_color(k, idx))
         btn.grid(row=row, column=2, sticky="w", padx=5)
-        self._color_swatches[key] = (swatch, rgb)
+        
+        store_key = key or f"secondary_{secondary_idx}"
+        self._color_swatches[store_key] = (swatch, rgb)
 
     def _pick_color(self, key, idx):
         if idx is not None:
