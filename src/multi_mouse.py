@@ -1143,12 +1143,7 @@ class MultiMouseManager:
             inputs[2].mi.time = 0
             inputs[2].mi.dwExtraInfo = c_void_p(0)
 
-        user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
-        if self.primary_device and self.primary_device in self.mice:
-            pm = self.mice[self.primary_device]
-            self.cursor_x, self.cursor_y = pm["x"], pm["y"]
-        else:
-            self.cursor_x, self.cursor_y = x, y
+            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
             if self.primary_device and self.primary_device in self.mice:
                 pm = self.mice[self.primary_device]
                 self.cursor_x, self.cursor_y = pm["x"], pm["y"]
