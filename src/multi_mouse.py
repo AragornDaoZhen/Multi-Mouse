@@ -18,7 +18,38 @@ import sys
 import time
 import math
 import os
+import json
 import atexit
+
+# ============================================================================
+# Config loader
+# ============================================================================
+
+def load_config():
+    """Load config.json from the project directory."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(script_dir)
+    config_path = os.path.join(project_dir, "config.json")
+    defaults = {
+        "cursor_size": 14,
+        "primary_color": [160, 160, 160],
+        "secondary_colors": [[60, 140, 255], [80, 200, 80], [255, 80, 80], [255, 180, 50]],
+        "hover_threshold": 0.2,
+        "overlay_stationary_timeout": 0.25,
+        "move_throttle_px": 3,
+        "overlay_border_px": 2,
+        "overlay_interior_alpha": 180,
+        "secondary_hover_enabled": True,
+    }
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            user = json.load(f)
+        for k, v in defaults.items():
+            if k not in user:
+                user[k] = v
+        return user
+    except Exception:
+        return defaults
 
 # ============================================================================
 # Win32 API Bindings
@@ -493,15 +524,16 @@ _overlay_instances = {}
 class CursorOverlay:
     """A transparent, click-through overlay window showing a cursor image."""
 
-    CURSOR_SIZE = 14
-
-    def __init__(self, color_bgra: int, mouse_id: int, image_path = None):
+    def __init__(self, color_bgra: int, mouse_id: int, config: dict, image_path = None):
         self.color_bgra = color_bgra
         self.mouse_id = mouse_id
         self.image_path = image_path
         self.hwnd = None
         self.x = 0
         self.y = 0
+        self.size = config.get("cursor_size", 14)
+        self.border_px = config.get("overlay_border_px", 2)
+        self.interior_alpha = config.get("overlay_interior_alpha", 180)
         self._create()
 
     def _create(self):
@@ -536,7 +568,7 @@ class CursorOverlay:
         self.hwnd = user32.CreateWindowExW(
             ex_style, class_name, f"Cursor{self.mouse_id}",
             WS_POPUP,
-            0, 0, self.CURSOR_SIZE, self.CURSOR_SIZE,
+            0, 0, self.size, self.size,
             None, None, instance, None,
         )
 
@@ -550,8 +582,8 @@ class CursorOverlay:
 
         bmi = BITMAPINFO()
         bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER)
-        bmi.bmiHeader.biWidth = self.CURSOR_SIZE
-        bmi.bmiHeader.biHeight = -self.CURSOR_SIZE
+        bmi.bmiHeader.biWidth = self.size
+        bmi.bmiHeader.biHeight = -self.size
         bmi.bmiHeader.biPlanes = 1
         bmi.bmiHeader.biBitCount = 32
         bmi.bmiHeader.biCompression = 0
@@ -563,9 +595,9 @@ class CursorOverlay:
         # Try loading custom image first
         custom_loaded = False
         if self.image_path:
-            custom_hbmp, custom_pixels = _load_png_to_dib(self.image_path, self.CURSOR_SIZE, self.CURSOR_SIZE)
+            custom_hbmp, custom_pixels = _load_png_to_dib(self.image_path, self.size, self.size)
             if custom_pixels is not None:
-                pixel_count = self.CURSOR_SIZE * self.CURSOR_SIZE
+                pixel_count = self.size * self.size
                 for i in range(pixel_count):
                     pixels[i] = custom_pixels[i]
                 custom_loaded = True
@@ -575,7 +607,7 @@ class CursorOverlay:
                 gdi32.DeleteObject(custom_hbmp)
 
         if not custom_loaded:
-            self._draw_cursor(pixels, self.CURSOR_SIZE, self.color_bgra)
+            self._draw_cursor(pixels, self.size, self.color_bgra)
 
         old_bmp = gdi32.SelectObject(mem_dc, hbitmap)
 
@@ -586,7 +618,7 @@ class CursorOverlay:
         blend.AlphaFormat = AC_SRC_ALPHA
 
         pt_dst = POINT(self.x, self.y)
-        sz = SIZE(self.CURSOR_SIZE, self.CURSOR_SIZE)
+        sz = SIZE(self.size, self.size)
         pt_src = POINT(0, 0)
 
         user32.UpdateLayeredWindow(
@@ -603,42 +635,36 @@ class CursorOverlay:
         gdi32.DeleteDC(mem_dc)
         user32.ReleaseDC(None, screen_dc)
 
-    @staticmethod
-    def _draw_cursor(pixels, size, color):
-        """Draw a right-triangle cursor. Right angle at bottom-left, tip at top-left.
-        
-        Border is dark and fully opaque for clarity; interior is lighter.
-        """
+    def _draw_cursor(self, pixels, size, color):
+        """Draw a right-triangle cursor. Right angle at bottom-left, tip at top-left."""
         r = (color >> 16) & 0xFF
         g = (color >> 8) & 0xFF
         b = color & 0xFF
-        # Dark border color
         dr = max(0, r - 100)
         dg = max(0, g - 100)
         db = max(0, b - 100)
+        border = self.border_px
+        alpha = self.interior_alpha
 
         for y in range(size):
             for x in range(size):
                 in_triangle = (y >= x)
 
                 if in_triangle:
-                    dh = (y - x) / 1.414  # distance from hypotenuse
-                    dl = float(x)          # distance from left edge
-                    db2 = float(size - 1 - y)  # distance from bottom edge
+                    dh = (y - x) / 1.414
+                    dl = float(x)
+                    db2 = float(size - 1 - y)
                     edge_dist = min(dh, dl, db2)
 
-                    if edge_dist <= 2.0:
-                        # Opaque dark border (2px wide)
+                    if edge_dist <= border:
                         pixels[y * size + x] = bgra_pixel(dr, dg, db, 255)
                     else:
-                        # Lighter semi-transparent interior
-                        pixels[y * size + x] = bgra_pixel(r, g, b, 180)
+                        pixels[y * size + x] = bgra_pixel(r, g, b, alpha)
                 else:
-                    # Anti-alias outside the hypotenuse
                     dh_out = (x - y) / 1.414
                     if dh_out < 1.0:
-                        alpha = int(255 * (1.0 - dh_out))
-                        pixels[y * size + x] = bgra_pixel(dr, dg, db, alpha)
+                        a = int(255 * (1.0 - dh_out))
+                        pixels[y * size + x] = bgra_pixel(dr, dg, db, a)
                     else:
                         pixels[y * size + x] = 0x00000000
 
@@ -681,14 +707,8 @@ class MultiMouseManager:
     - All mice can click independently at their own tracked positions.
     """
 
-    COLORS = [
-        bgra_pixel(60, 140, 255),   # Blue (default secondary cursor)
-        bgra_pixel(80, 200, 80),    # Green
-        bgra_pixel(255, 80, 80),    # Red
-        bgra_pixel(255, 180, 50),   # Orange
-    ]
+    def __init__(self, config: dict = None):
 
-    def __init__(self):
         self.mice = {}
         self.primary_device = None
         self.msg_hwnd = None
@@ -700,13 +720,22 @@ class MultiMouseManager:
         self.cursor_x = 0
         self.cursor_y = 0
 
-        # Cache virtual desktop dims — saves 4 kernel calls per movement
+        # Config-driven values
+        self.colors = [bgra_pixel(*c) for c in config.get("secondary_colors", [[60, 140, 255]])]
+        self.primary_color = bgra_pixel(*config.get("primary_color", [160, 160, 160]))
+        self.hover_threshold = config.get("hover_threshold", 0.2)
+        self.stationary_timeout = config.get("overlay_stationary_timeout", 0.25)
+        self.move_throttle_px = config.get("move_throttle_px", 3)
+        self.throttle_sq = self.move_throttle_px * self.move_throttle_px
+        self.secondary_hover = config.get("secondary_hover_enabled", True)
+
+        # Cache virtual desktop dims
         self._virt_x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
         self._virt_y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
         self._virt_w = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN) or user32.GetSystemMetrics(SM_CXSCREEN)
         self._virt_h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN) or user32.GetSystemMetrics(SM_CYSCREEN)
 
-        # Throttle state: skip SendInput moves if cursor is already close
+        # Throttle state
         self._last_move_x = -1
         self._last_move_y = -1
 
@@ -907,24 +936,21 @@ class MultiMouseManager:
 
                 if is_primary:
                     self.primary_device = hdevice
-                    # Primary also gets an overlay so it's always visible,
-                    # even when the system cursor follows the secondary mouse.
-                    primary_color = bgra_pixel(160, 160, 160)  # neutral grey, visible on light/dark
                     custom_path = None
                     candidate = os.path.join(project_dir, "cursor0.png")
                     if os.path.isfile(candidate):
                         custom_path = candidate
                         print(f"[Mouse {mouse_id}] Custom cursor: cursor0.png")
-                    overlay = CursorOverlay(primary_color, mouse_id, custom_path)
+                    overlay = CursorOverlay(self.primary_color, mouse_id, self.config, custom_path)
                     print(f"[Mouse {mouse_id}] PRIMARY   (device: {hdevice}) - system cursor + overlay")
                 else:
-                    color = self.COLORS[(mouse_id - 1) % len(self.COLORS)]
+                    color = self.colors[(mouse_id - 1) % len(self.colors)]
                     custom_path = None
                     candidate = os.path.join(project_dir, f"cursor{mouse_id}.png")
                     if os.path.isfile(candidate):
                         custom_path = candidate
                         print(f"[Mouse {mouse_id}] Custom cursor: cursor{mouse_id}.png")
-                    overlay = CursorOverlay(color, mouse_id, custom_path)
+                    overlay = CursorOverlay(color, mouse_id, self.config, custom_path)
                     color_names = ["Blue", "Green", "Red", "Orange"]
                     cname = color_names[(mouse_id - 1) % len(color_names)]
                     print(f"[Mouse {mouse_id}] SECONDARY (device: {hdevice}) - {cname} indicator")
@@ -1003,16 +1029,16 @@ class MultiMouseManager:
                 primary_still = True
                 if self.primary_device and self.primary_device in self.mice and not is_primary:
                     pm = self.mice[self.primary_device]
-                    primary_still = (time.time() - pm.get("last_move_time", 0)) > 0.2
+                    primary_still = (time.time() - pm.get("last_move_time", 0)) > self.hover_threshold
 
                 if is_primary:
                     user32.SetCursorPos(state["x"], state["y"])
                     self.cursor_x, self.cursor_y = state["x"], state["y"]
-                elif self.independent_mode and primary_still:
+                elif self.independent_mode and primary_still and self.secondary_hover:
                     # Throttle: skip move if cursor is already near target
                     dx = state["x"] - self._last_move_x
                     dy = state["y"] - self._last_move_y
-                    if dx * dx + dy * dy >= 9:  # 3px threshold
+                    if dx * dx + dy * dy >= self.throttle_sq:
                         abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
                         inp = INPUT_STRUCT()
                         inp.type = INPUT_MOUSE
@@ -1107,7 +1133,7 @@ class MultiMouseManager:
                 if is_primary:
                     # Primary: only show when stationary
                     elapsed = time.time() - state.get("last_move_time", 0)
-                    should_show = elapsed > 0.25
+                    should_show = elapsed > self.stationary_timeout
                 if should_show and not state.get("overlay_visible", True):
                     overlay.show()
                     state["overlay_visible"] = True
