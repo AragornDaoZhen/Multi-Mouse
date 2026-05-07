@@ -2,11 +2,6 @@
 
 Use multiple physical mice simultaneously on Windows, each with its own cursor and click target.
 
-## Project Credits
-
-- **Executor**：DeepSeek V4
-- **Designer / Jack-of-all-trades**：AragornDaoZhen
-
 ## Quick Start
 
 **With Python installed:**
@@ -88,3 +83,8 @@ Uses Windows built-in GDI+ to load PNG images, renders to 32-bit BGRA DIB sectio
 6. **DPI scaling** — Overlay cursor positions may have minor offsets on high-DPI displays (no DPI-awareness adaptation yet).
 
 7. **Antivirus may flag the hook** — WH_MOUSE_LL is a global hook; some security software may classify it as suspicious behavior.
+
+## Project Credits
+
+- **Executor**：DeepSeek V4
+- **Designer / Jack-of-all-trades**：AragornDaoZhen

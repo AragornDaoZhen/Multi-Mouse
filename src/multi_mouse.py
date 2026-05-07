@@ -1094,9 +1094,12 @@ class MultiMouseManager:
     def _send_mouse_button(self, x, y, button_flag, is_down):
         """Send a mouse click via SendInput with absolute coordinates.
         
-        Move and button are in one atomic SendInput batch — this avoids
-        timing gaps between cursor positioning and button events that
-        break double-click detection and hover-popup clicks.
+        For button-DOWN: move+button in one atomic batch (2 events).
+        For button-UP:   move+button (2 events), then restore via
+                         SetCursorPos *after* the batch completes.
+                         This ensures the app sees the cursor at the
+                         click position when processing the message
+                         (some apps use GetCursorPos for context menus).
         """
         abs_x, abs_y = self._get_absolute_coords(x, y)
 
@@ -1121,13 +1124,9 @@ class MultiMouseManager:
             user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
             self.cursor_x, self.cursor_y = x, y
         else:
-            if self.primary_device and self.primary_device in self.mice:
-                pm = self.mice[self.primary_device]
-                restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
-            else:
-                restore_x, restore_y = abs_x, abs_y
-
-            inputs = (INPUT_STRUCT * 3)()
+            # Button-up: move to target + release in one batch,
+            # then restore cursor externally so GetCursorPos() is correct.
+            inputs = (INPUT_STRUCT * 2)()
             inputs[0].type = INPUT_MOUSE
             inputs[0].mi.dx = abs_x
             inputs[0].mi.dy = abs_y
@@ -1144,20 +1143,9 @@ class MultiMouseManager:
             inputs[1].mi.time = 0
             inputs[1].mi.dwExtraInfo = c_void_p(0)
 
-            inputs[2].type = INPUT_MOUSE
-            inputs[2].mi.dx = restore_x
-            inputs[2].mi.dy = restore_y
-            inputs[2].mi.mouseData = 0
-            inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[2].mi.time = 0
-            inputs[2].mi.dwExtraInfo = c_void_p(0)
-
-            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
-            if self.primary_device and self.primary_device in self.mice:
-                pm = self.mice[self.primary_device]
-                self.cursor_x, self.cursor_y = pm["x"], pm["y"]
-            else:
-                self.cursor_x, self.cursor_y = x, y
+            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+            # Restore cursor AFTER the button-up is processed
+            self._restore_primary_cursor()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
         """Send a mouse wheel event at the given position.

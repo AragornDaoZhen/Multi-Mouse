@@ -2,11 +2,6 @@
 
 让 Windows 同时使用多个物理鼠标，每个鼠标拥有独立的光标和点击。
 
-## 立项过程
-
-- **执行者**：DeepSeek V4
-- **设计者 / 打杂的**：AragornDaoZhen
-
 ## 快速开始
 
 **有 Python 环境：**
@@ -88,3 +83,8 @@ pyinstaller --onefile --console run.py
 6. **DPI 缩放** — 在高 DPI 显示器上，覆盖层光标位置可能有微小偏差（未做 DPI 感知适配）。
 
 7. **杀毒软件可能报警** — WH_MOUSE_LL 是全局钩子，某些安全软件可能将其标记为可疑行为。
+
+## 立项过程
+
+- **执行者**：DeepSeek V4
+- **设计者 / 打杂的**：AragornDaoZhen
