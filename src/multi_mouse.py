@@ -1092,59 +1092,75 @@ class MultiMouseManager:
         return max(0, min(abs_x, 65535)), max(0, min(abs_y, 65535))
 
     def _send_mouse_button(self, x, y, button_flag, is_down):
-        """Send a mouse click via SendInput with absolute coordinates.
+        """Send a mouse click at the given screen position.
         
-        For button-DOWN: move+button in one atomic batch (2 events).
-        For button-UP:   move+button (2 events), then restore via
-                         SetCursorPos *after* the batch completes.
-                         This ensures the app sees the cursor at the
-                         click position when processing the message
-                         (some apps use GetCursorPos for context menus).
+        Left-click:  atomic SendInput batch (move+button) for reliable
+                     double-click and hover-popup interaction.
+        Right-click: SetCursorPos physically moves the cursor first, then
+                     single-event SendInput. This ensures GetCursorPos()
+                     returns the correct position when apps build context
+                     menus (WeChat, Chrome, etc. use GetCursorPos).
         """
-        abs_x, abs_y = self._get_absolute_coords(x, y)
+        is_right = button_flag in (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
 
-        if is_down:
-            inputs = (INPUT_STRUCT * 2)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
-
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
-
-            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+        if is_right or is_down:
+            # Physically move cursor — essential for right-click context menus
+            user32.SetCursorPos(int(x), int(y))
             self.cursor_x, self.cursor_y = x, y
+
+        if is_right:
+            # Right-click: single-event SendInput (no atomic batch needed)
+            inp = INPUT_STRUCT()
+            inp.type = INPUT_MOUSE
+            inp.mi.dx = 0
+            inp.mi.dy = 0
+            inp.mi.mouseData = 0
+            inp.mi.dwFlags = button_flag
+            inp.mi.time = 0
+            inp.mi.dwExtraInfo = c_void_p(0)
+            user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
         else:
-            # Button-up: move to target + release in one batch,
-            # then restore cursor externally so GetCursorPos() is correct.
-            inputs = (INPUT_STRUCT * 2)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
+            # Left-click: atomic SendInput with absolute coordinates
+            abs_x, abs_y = self._get_absolute_coords(x, y)
+            if is_down:
+                inputs = (INPUT_STRUCT * 2)()
+                inputs[0].type = INPUT_MOUSE
+                inputs[0].mi.dx = abs_x
+                inputs[0].mi.dy = abs_y
+                inputs[0].mi.mouseData = 0
+                inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+                inputs[0].mi.time = 0
+                inputs[0].mi.dwExtraInfo = c_void_p(0)
+                inputs[1].type = INPUT_MOUSE
+                inputs[1].mi.dx = 0
+                inputs[1].mi.dy = 0
+                inputs[1].mi.mouseData = 0
+                inputs[1].mi.dwFlags = button_flag
+                inputs[1].mi.time = 0
+                inputs[1].mi.dwExtraInfo = c_void_p(0)
+                user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+                self.cursor_x, self.cursor_y = x, y
+            else:
+                # Left-up: move+release in batch, then restore externally
+                inputs = (INPUT_STRUCT * 2)()
+                inputs[0].type = INPUT_MOUSE
+                inputs[0].mi.dx = abs_x
+                inputs[0].mi.dy = abs_y
+                inputs[0].mi.mouseData = 0
+                inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+                inputs[0].mi.time = 0
+                inputs[0].mi.dwExtraInfo = c_void_p(0)
+                inputs[1].type = INPUT_MOUSE
+                inputs[1].mi.dx = 0
+                inputs[1].mi.dy = 0
+                inputs[1].mi.mouseData = 0
+                inputs[1].mi.dwFlags = button_flag
+                inputs[1].mi.time = 0
+                inputs[1].mi.dwExtraInfo = c_void_p(0)
+                user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+                self._restore_primary_cursor()
 
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
-
-            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
-            # Restore cursor AFTER the button-up is processed
+        if is_right and not is_down:
             self._restore_primary_cursor()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
