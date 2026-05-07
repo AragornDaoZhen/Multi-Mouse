@@ -1,7 +1,32 @@
 {
     "cursor_size": 14,
-    "primary_color": [160, 160, 160],
-    "secondary_colors": [[60, 140, 255], [80, 200, 80], [255, 80, 80], [255, 180, 50]],
+    "primary_color": [
+        160,
+        160,
+        160
+    ],
+    "secondary_colors": [
+        [
+            45,
+            208,
+            249
+        ],
+        [
+            80,
+            200,
+            80
+        ],
+        [
+            255,
+            80,
+            80
+        ],
+        [
+            255,
+            180,
+            50
+        ]
+    ],
     "custom_cursors": {
         "0": null,
         "1": null,
@@ -13,5 +38,6 @@
     "move_throttle_px": 3,
     "overlay_border_px": 2,
     "overlay_interior_alpha": 180,
-    "secondary_hover_enabled": true
+    "secondary_hover_enabled": true,
+    "language": "zh"
 }

@@ -18,6 +18,12 @@ pyinstaller --onefile --console run.py
 ```
 Run the generated `dist\run.exe`.
 
+## Settings Panel
+
+Double-click `设置面板.bat` or run `python settings_gui.py` to open the visual settings panel.
+
+Adjustable parameters: cursor size, border width, transparency, move throttle, hover takeover time, stationary display time, per-mouse colors, hover on/off, language toggle (中文/English).
+
 ## Custom Cursor Icons
 
 Place PNG images in the project root directory (~32×32 recommended, transparent background supported):
@@ -28,7 +34,7 @@ Place PNG images in the project root directory (~32×32 recommended, transparent
 | `cursor1.png` | Second mouse |
 | `cursor2.png` | Third mouse |
 
-Without custom images, built-in triangular cursors are used (grey for primary, blue for secondary).
+Without custom images, built-in triangular cursors are used (grey for primary, blue for secondary — colors adjustable in settings panel).
 
 ## How It Works
 
@@ -47,16 +53,17 @@ Physical mouse → WH_MOUSE_LL hook → Raw Input (WM_INPUT) → Synthetic event
 
 - Raw input provides relative deltas (delta X/Y); absolute coordinates are accumulated per device
 - Primary mouse: system cursor follows via `SetCursorPos`
-- Secondary mouse: system cursor follows via `SendInput(ABSOLUTE|MOVE)` (enables hover effects)
+- Secondary mouse: system cursor follows via `SendInput(ABSOLUTE|MOVE)` (enables hover effects; only when primary is stationary to prevent flicker)
 - Each mouse has its own overlay cursor (Layered Window), always displayed at the correct position
-- Primary overlay auto-hides during movement (avoids overlap with system cursor), reappears after 250ms of stillness
+- Primary overlay auto-hides during movement (avoids overlap with system cursor), reappears after stillness
 
 ### Click Handling
 
 - Physical clicks are intercepted and discarded by WH_MOUSE_LL
 - Synthetic clicks are sent via `SendInput` based on raw input button flags:
-  - **Button down**: `(move to target, button down)` — 2-event atomic batch
-  - **Button up**: `(move to target, button up, restore to primary position)` — 3-event atomic batch
+  - Left/Right button down: `(move to target, button down)` — 2-event atomic batch
+  - Left button up: `(move to target, button up, restore to primary)` — 3-event atomic batch
+  - Right button up: `(move to target, button up)` — 2-event batch, cursor stays at click position (ensures `GetCursorPos()` returns correct location for context menus)
 - WH_MOUSE_LL checks the `LLMHF_INJECTED` flag to let synthetic events through
 
 ### Drag Support
