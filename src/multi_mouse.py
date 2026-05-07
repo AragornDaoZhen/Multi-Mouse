@@ -1088,104 +1088,54 @@ class MultiMouseManager:
         return max(0, min(abs_x, 65535)), max(0, min(abs_y, 65535))
 
     def _send_mouse_button(self, x, y, button_flag, is_down):
-        """Send a mouse click via SendInput with absolute coordinates."""
-        abs_x, abs_y = self._get_absolute_coords(x, y)
+        """Send a mouse click at the given screen position.
+        
+        Uses SetCursorPos to physically move the cursor (fast), then a
+        single-event SendInput for the button. This avoids the absolute-
+        coordinate mapping that can cause position drift in some apps.
+        """
+        user32.SetCursorPos(int(x), int(y))
+        self.cursor_x, self.cursor_y = x, y
 
-        if is_down:
-            inputs = (INPUT_STRUCT * 2)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
+        inp = INPUT_STRUCT()
+        inp.type = INPUT_MOUSE
+        inp.mi.dx = 0
+        inp.mi.dy = 0
+        inp.mi.mouseData = 0
+        inp.mi.dwFlags = button_flag
+        inp.mi.time = 0
+        inp.mi.dwExtraInfo = c_void_p(0)
 
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
+        user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
 
-            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
-            self.cursor_x, self.cursor_y = x, y
-        else:
-            if self.primary_device and self.primary_device in self.mice:
-                pm = self.mice[self.primary_device]
-                restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
-            else:
-                restore_x, restore_y = abs_x, abs_y
-
-            inputs = (INPUT_STRUCT * 3)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
-
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
-
-            inputs[2].type = INPUT_MOUSE
-            inputs[2].mi.dx = restore_x
-            inputs[2].mi.dy = restore_y
-            inputs[2].mi.mouseData = 0
-            inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[2].mi.time = 0
-            inputs[2].mi.dwExtraInfo = c_void_p(0)
-
-            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
-            if self.primary_device and self.primary_device in self.mice:
-                pm = self.mice[self.primary_device]
-                self.cursor_x, self.cursor_y = pm["x"], pm["y"]
-            else:
-                self.cursor_x, self.cursor_y = x, y
+        if not is_down:
+            self._restore_primary_cursor()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
-        """Send a mouse wheel event at the given position via SendInput."""
-        abs_x, abs_y = self._get_absolute_coords(x, y)
+        """Send a mouse wheel event at the given position.
+        
+        Uses SetCursorPos + single-event SendInput for speed — wheel events
+        fire at high frequency and the 3-event batch was causing lag.
+        """
+        held_dev = self._find_button_held_device()
 
-        if self.primary_device and self.primary_device in self.mice:
-            pm = self.mice[self.primary_device]
-            restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
-        else:
-            restore_x, restore_y = abs_x, abs_y
+        if held_dev is None:
+            user32.SetCursorPos(int(x), int(y))
+            self.cursor_x, self.cursor_y = x, y
 
-        inputs = (INPUT_STRUCT * 3)()
-        inputs[0].type = INPUT_MOUSE
-        inputs[0].mi.dx = abs_x
-        inputs[0].mi.dy = abs_y
-        inputs[0].mi.mouseData = 0
-        inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-        inputs[0].mi.time = 0
-        inputs[0].mi.dwExtraInfo = c_void_p(0)
+        inp = INPUT_STRUCT()
+        inp.type = INPUT_MOUSE
+        inp.mi.dx = 0
+        inp.mi.dy = 0
+        inp.mi.mouseData = delta
+        inp.mi.dwFlags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
+        inp.mi.time = 0
+        inp.mi.dwExtraInfo = c_void_p(0)
 
-        inputs[1].type = INPUT_MOUSE
-        inputs[1].mi.dx = 0
-        inputs[1].mi.dy = 0
-        inputs[1].mi.mouseData = delta
-        inputs[1].mi.dwFlags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
-        inputs[1].mi.time = 0
-        inputs[1].mi.dwExtraInfo = c_void_p(0)
+        user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
 
-        inputs[2].type = INPUT_MOUSE
-        inputs[2].mi.dx = restore_x
-        inputs[2].mi.dy = restore_y
-        inputs[2].mi.mouseData = 0
-        inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-        inputs[2].mi.time = 0
-        inputs[2].mi.dwExtraInfo = c_void_p(0)
-
-        user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
+        if held_dev is None:
+            self._restore_primary_cursor()
 
     def _find_button_held_device(self):
         """Return the device handle of the mouse that currently has a button held, or None."""
