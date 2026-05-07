@@ -978,46 +978,52 @@ class MultiMouseManager:
             if has_moved:
                 state["last_move_time"] = time.time()
 
-            # ---- Update cursor position ----
+            # ---- Update cursor position / overlay ----
             held_dev = self._find_button_held_device()
 
             # Always move overlay (tracks mouse regardless of button state)
             if state["overlay"]:
                 state["overlay"].move(state["x"], state["y"])
 
-            # Check if this raw input event has a button transition
-            has_button_event = (
-                usButtonFlags & (
-                    RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_LEFT_BUTTON_UP |
-                    RI_MOUSE_RIGHT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_UP |
-                    RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_MIDDLE_BUTTON_UP
-                )
-            ) != 0
-
-            cursor_moved = False
-            if held_dev is None and not has_button_event:
-                primary_still = True
-                if self.primary_device and self.primary_device in self.mice:
-                    pm = self.mice[self.primary_device]
-                    primary_still = (time.time() - pm.get("last_move_time", 0)) > 0.2
-
-                if is_primary or (self.independent_mode and primary_still):
+            if held_dev is None:
+                # No button held — normal movement.
+                # Secondary uses SendInput(ABSOLUTE|MOVE) so hover effects
+                # go through the proper input pipeline.
+                if is_primary:
                     user32.SetCursorPos(state["x"], state["y"])
                     self.cursor_x, self.cursor_y = state["x"], state["y"]
-                    cursor_moved = True
-                elif not self.independent_mode and not is_primary:
+                elif self.independent_mode:
+                    abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
+                    inp = INPUT_STRUCT()
+                    inp.type = INPUT_MOUSE
+                    inp.mi.dx = abs_x
+                    inp.mi.dy = abs_y
+                    inp.mi.mouseData = 0
+                    inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+                    inp.mi.time = 0
+                    inp.mi.dwExtraInfo = c_void_p(0)
+                    user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+                    self.cursor_x, self.cursor_y = state["x"], state["y"]
+                elif not self.independent_mode:
                     self._restore_primary_cursor()
-            elif held_dev == hdevice and not has_button_event:
-                # Pure drag — no button transition in this event
-                user32.SetCursorPos(state["x"], state["y"])
-                self.cursor_x, self.cursor_y = state["x"], state["y"]
-                cursor_moved = True
-            # else: button transition event — cursor positioning is handled
-            # by _send_mouse_button / _send_wheel, skip here to avoid delay.
-
-            # Only sync overlay visibility when the cursor actually moved
-            if cursor_moved:
-                self._sync_overlay_visibility()
+            elif held_dev == hdevice:
+                # THIS device holds a button (drag in progress).
+                if is_primary:
+                    user32.SetCursorPos(state["x"], state["y"])
+                    self.cursor_x, self.cursor_y = state["x"], state["y"]
+                elif self.independent_mode:
+                    abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
+                    inp = INPUT_STRUCT()
+                    inp.type = INPUT_MOUSE
+                    inp.mi.dx = abs_x
+                    inp.mi.dy = abs_y
+                    inp.mi.mouseData = 0
+                    inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+                    inp.mi.time = 0
+                    inp.mi.dwExtraInfo = c_void_p(0)
+                    user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+                    self.cursor_x, self.cursor_y = state["x"], state["y"]
+            # else: another device holds button — don't move cursor
 
             # ---- SendInput for button events ----
             if self.independent_mode or not is_primary:
@@ -1103,35 +1109,71 @@ class MultiMouseManager:
         return max(0, min(abs_x, 65535)), max(0, min(abs_y, 65535))
 
     def _send_mouse_button(self, x, y, button_flag, is_down):
-        """Send a mouse click.
+        """Send a mouse click via SendInput with absolute coordinates.
         
-        Uses SetCursorPos to physically position the cursor (visible to
-        GetCursorPos and hover popups), then SendInput for the button.
-        Right-click UP does not restore the cursor — it stays at the
-        click position so context menus get the correct location.
+        Move and button are in one atomic SendInput batch.
+        Right-click UP does NOT restore cursor — it stays at the click
+        position so GetCursorPos() returns the correct location.
         """
+        abs_x, abs_y = self._get_absolute_coords(x, y)
         is_right = button_flag in (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
 
-        # Physically move cursor — ensures GetCursorPos() and hover
-        # popups see the correct position
-        user32.SetCursorPos(int(x), int(y))
-        self.cursor_x, self.cursor_y = x, y
+        if is_down or is_right:
+            inputs = (INPUT_STRUCT * 2)()
+            inputs[0].type = INPUT_MOUSE
+            inputs[0].mi.dx = abs_x
+            inputs[0].mi.dy = abs_y
+            inputs[0].mi.mouseData = 0
+            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+            inputs[0].mi.time = 0
+            inputs[0].mi.dwExtraInfo = c_void_p(0)
+            inputs[1].type = INPUT_MOUSE
+            inputs[1].mi.dx = 0
+            inputs[1].mi.dy = 0
+            inputs[1].mi.mouseData = 0
+            inputs[1].mi.dwFlags = button_flag
+            inputs[1].mi.time = 0
+            inputs[1].mi.dwExtraInfo = c_void_p(0)
+            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+            self.cursor_x, self.cursor_y = x, y
+        else:
+            # Left-up: restore cursor to primary after release
+            if self.primary_device and self.primary_device in self.mice:
+                pm = self.mice[self.primary_device]
+                restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
+            else:
+                restore_x, restore_y = abs_x, abs_y
 
-        inp = INPUT_STRUCT()
-        inp.type = INPUT_MOUSE
-        inp.mi.dx = 0
-        inp.mi.dy = 0
-        inp.mi.mouseData = 0
-        inp.mi.dwFlags = button_flag
-        inp.mi.time = 0
-        inp.mi.dwExtraInfo = c_void_p(0)
-        user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+            inputs = (INPUT_STRUCT * 3)()
+            inputs[0].type = INPUT_MOUSE
+            inputs[0].mi.dx = abs_x
+            inputs[0].mi.dy = abs_y
+            inputs[0].mi.mouseData = 0
+            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+            inputs[0].mi.time = 0
+            inputs[0].mi.dwExtraInfo = c_void_p(0)
+            inputs[1].type = INPUT_MOUSE
+            inputs[1].mi.dx = 0
+            inputs[1].mi.dy = 0
+            inputs[1].mi.mouseData = 0
+            inputs[1].mi.dwFlags = button_flag
+            inputs[1].mi.time = 0
+            inputs[1].mi.dwExtraInfo = c_void_p(0)
+            inputs[2].type = INPUT_MOUSE
+            inputs[2].mi.dx = restore_x
+            inputs[2].mi.dy = restore_y
+            inputs[2].mi.mouseData = 0
+            inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+            inputs[2].mi.time = 0
+            inputs[2].mi.dwExtraInfo = c_void_p(0)
+            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
+            if self.primary_device and self.primary_device in self.mice:
+                pm = self.mice[self.primary_device]
+                self.cursor_x, self.cursor_y = pm["x"], pm["y"]
+            else:
+                self.cursor_x, self.cursor_y = x, y
 
-        if not is_down and not is_right:
-            # Left-up: restore cursor to primary
-            self._restore_primary_cursor()
-        elif is_right and not is_down:
-            # Right-up: leave cursor at click position for context menu
+        if is_right and not is_down:
             self._sync_overlay_visibility()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
