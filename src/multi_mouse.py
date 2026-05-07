@@ -697,6 +697,8 @@ class MultiMouseManager:
         self.lock = threading.Lock()
         self._mouse_id_counter = 0
         self.independent_mode = False
+        self.cursor_x = 0
+        self.cursor_y = 0
 
     def start(self):
         """Start tracking multiple mice."""
@@ -919,6 +921,7 @@ class MultiMouseManager:
 
                 pt = POINT()
                 user32.GetCursorPos(byref(pt))
+                self.cursor_x, self.cursor_y = pt.x, pt.y
                 self.mice[hdevice] = {
                     "x": pt.x,
                     "y": pt.y,
@@ -971,14 +974,11 @@ class MultiMouseManager:
             state["x"] = max(0, min(state["x"], sw - 1))
             state["y"] = max(0, min(state["y"], sh - 1))
 
-            # Track last movement time for primary overlay auto-hide
+            # Track last movement time for overlay logic
             if has_moved:
                 state["last_move_time"] = time.time()
-                if is_primary and state.get("overlay"):
-                    state["overlay"].hide()
-                    state["overlay_visible"] = False
 
-            # ---- Update cursor position / overlay ----
+            # ---- Update cursor position ----
             held_dev = self._find_button_held_device()
 
             # Always move overlay (tracks mouse regardless of button state)
@@ -987,43 +987,27 @@ class MultiMouseManager:
 
             if held_dev is None:
                 # No button held — normal movement.
-                # Move system cursor so hover effects (tooltips, etc.) work.
-                # Primary uses SetCursorPos; secondary uses SendInput so the
-                # WH_MOUSE_LL hook lets it through.
-                if is_primary:
+                # Primary always moves system cursor.
+                # Secondary only moves it when primary is stationary (avoids flicker).
+                primary_still = True
+                if self.primary_device and self.primary_device in self.mice:
+                    pm = self.mice[self.primary_device]
+                    primary_still = (time.time() - pm.get("last_move_time", 0)) > 0.2
+
+                if is_primary or (self.independent_mode and primary_still):
                     user32.SetCursorPos(state["x"], state["y"])
-                elif self.independent_mode:
-                    abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
-                    inp = INPUT_STRUCT()
-                    inp.type = INPUT_MOUSE
-                    inp.mi.dx = abs_x
-                    inp.mi.dy = abs_y
-                    inp.mi.mouseData = 0
-                    inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-                    inp.mi.time = 0
-                    inp.mi.dwExtraInfo = c_void_p(0)
-                    user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
-                elif not self.independent_mode:
+                    self.cursor_x, self.cursor_y = state["x"], state["y"]
+                elif not self.independent_mode and not is_primary:
                     self._restore_primary_cursor()
             elif held_dev == hdevice:
-                # THIS device holds a button (drag in progress).
-                # Move cursor so the user sees drag feedback.
-                if is_primary:
-                    user32.SetCursorPos(state["x"], state["y"])
-                elif self.independent_mode:
-                    # Secondary drag: send move events via SendInput so
-                    # applications draw the selection marquee.
-                    abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
-                    inp = INPUT_STRUCT()
-                    inp.type = INPUT_MOUSE
-                    inp.mi.dx = abs_x
-                    inp.mi.dy = abs_y
-                    inp.mi.mouseData = 0
-                    inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-                    inp.mi.time = 0
-                    inp.mi.dwExtraInfo = c_void_p(0)
-                    user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+                # THIS device holds a button — drag in progress.
+                user32.SetCursorPos(state["x"], state["y"])
+                self.cursor_x, self.cursor_y = state["x"], state["y"]
             # else: another device holds button — don't move cursor
+
+            # ---- Sync overlay visibility ----
+            # Hide overlay when system cursor is near the mouse position.
+            self._sync_overlay_visibility()
 
             # ---- SendInput for button events ----
             if self.independent_mode or not is_primary:
@@ -1053,18 +1037,37 @@ class MultiMouseManager:
     # ------------------------------------------------------------------
 
     def _check_stationary(self):
-        """Show primary overlay after the mouse has been still for a moment."""
-        if not self.primary_device or self.primary_device not in self.mice:
-            return
-        pm = self.mice[self.primary_device]
-        overlay = pm.get("overlay")
-        if not overlay:
-            return
-        if not pm.get("overlay_visible", True):
-            elapsed = time.time() - pm.get("last_move_time", 0)
-            if elapsed > 0.25:  # 250ms stillness
-                overlay.show()
-                pm["overlay_visible"] = True
+        """Called on raw input events — sync overlay visibility."""
+        self._sync_overlay_visibility()
+
+    def _sync_overlay_visibility(self):
+        """Hide overlay when system cursor is near the mouse position.
+        
+        Rule: prefer showing the system cursor. If the system cursor is at
+        a mouse's position, hide that mouse's overlay. Otherwise show it.
+        Primary overlay also requires the mouse to be stationary.
+        """
+        for hdevice, state in self.mice.items():
+            overlay = state.get("overlay")
+            if not overlay:
+                continue
+            dist = math.hypot(self.cursor_x - state["x"], self.cursor_y - state["y"])
+            is_primary = state.get("is_primary", False)
+
+            if dist < 10:  # System cursor near this mouse → hide overlay
+                if state.get("overlay_visible", True):
+                    overlay.hide()
+                    state["overlay_visible"] = False
+            else:
+                # System cursor elsewhere → show overlay
+                should_show = True
+                if is_primary:
+                    # Primary: only show when stationary
+                    elapsed = time.time() - state.get("last_move_time", 0)
+                    should_show = elapsed > 0.25
+                if should_show and not state.get("overlay_visible", True):
+                    overlay.show()
+                    state["overlay_visible"] = True
 
     # ------------------------------------------------------------------
     # SendInput helpers
@@ -1085,12 +1088,7 @@ class MultiMouseManager:
         return max(0, min(abs_x, 65535)), max(0, min(abs_y, 65535))
 
     def _send_mouse_button(self, x, y, button_flag, is_down):
-        """Send a mouse click via SendInput with absolute coordinates.
-        
-        The move and button event are in one atomic SendInput batch —
-        this eliminates timing races between SetCursorPos and the
-        button event that cause unreliable clicks.
-        """
+        """Send a mouse click via SendInput with absolute coordinates."""
         abs_x, abs_y = self._get_absolute_coords(x, y)
 
         if is_down:
@@ -1112,6 +1110,7 @@ class MultiMouseManager:
             inputs[1].mi.dwExtraInfo = c_void_p(0)
 
             user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
+            self.cursor_x, self.cursor_y = x, y
         else:
             if self.primary_device and self.primary_device in self.mice:
                 pm = self.mice[self.primary_device]
@@ -1144,7 +1143,17 @@ class MultiMouseManager:
             inputs[2].mi.time = 0
             inputs[2].mi.dwExtraInfo = c_void_p(0)
 
-            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
+        user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
+        if self.primary_device and self.primary_device in self.mice:
+            pm = self.mice[self.primary_device]
+            self.cursor_x, self.cursor_y = pm["x"], pm["y"]
+        else:
+            self.cursor_x, self.cursor_y = x, y
+            if self.primary_device and self.primary_device in self.mice:
+                pm = self.mice[self.primary_device]
+                self.cursor_x, self.cursor_y = pm["x"], pm["y"]
+            else:
+                self.cursor_x, self.cursor_y = x, y
 
     def _send_wheel(self, x, y, delta, horizontal=False):
         """Send a mouse wheel event at the given position via SendInput."""
@@ -1203,6 +1212,7 @@ class MultiMouseManager:
         if self.primary_device and self.primary_device in self.mice:
             pm = self.mice[self.primary_device]
             user32.SetCursorPos(pm["x"], pm["y"])
+            self.cursor_x, self.cursor_y = pm["x"], pm["y"]
 
 # ============================================================================
 # Entry point
