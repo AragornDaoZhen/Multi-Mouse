@@ -1,10 +1,17 @@
 """Multi-Mouse Settings Panel — GUI configuration editor."""
 import json
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk, colorchooser, messagebox
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Config path: exe directory (PyInstaller) or project root
+if getattr(sys, 'frozen', False):
+    _BASE = os.path.dirname(sys.executable)
+else:
+    _BASE = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_PATH = os.path.join(_BASE, "config.json")
 
 STRINGS = {
     "zh": {

@@ -26,10 +26,11 @@ import atexit
 # ============================================================================
 
 def load_config():
-    """Load config.json from the project directory."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_dir = os.path.dirname(script_dir)
-    config_path = os.path.join(project_dir, "config.json")
+    """Load config.json from the project directory or PyInstaller bundle."""
+    import sys as _sys
+    # PyInstaller bundle: look in exe directory first
+    base = os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(base, "config.json")
     defaults = {
         "cursor_size": 14,
         "primary_color": [160, 160, 160],
