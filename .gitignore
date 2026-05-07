@@ -6,3 +6,4 @@ cursor*.png
 dist/
 build/
 *.spec
+*.egg-info/
