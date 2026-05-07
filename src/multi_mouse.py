@@ -700,6 +700,16 @@ class MultiMouseManager:
         self.cursor_x = 0
         self.cursor_y = 0
 
+        # Cache virtual desktop dims — saves 4 kernel calls per movement
+        self._virt_x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        self._virt_y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        self._virt_w = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN) or user32.GetSystemMetrics(SM_CXSCREEN)
+        self._virt_h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN) or user32.GetSystemMetrics(SM_CYSCREEN)
+
+        # Throttle state: skip SendInput moves if cursor is already close
+        self._last_move_x = -1
+        self._last_move_y = -1
+
     def start(self):
         """Start tracking multiple mice."""
         self.running = True
@@ -999,16 +1009,22 @@ class MultiMouseManager:
                     user32.SetCursorPos(state["x"], state["y"])
                     self.cursor_x, self.cursor_y = state["x"], state["y"]
                 elif self.independent_mode and primary_still:
-                    abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
-                    inp = INPUT_STRUCT()
-                    inp.type = INPUT_MOUSE
-                    inp.mi.dx = abs_x
-                    inp.mi.dy = abs_y
-                    inp.mi.mouseData = 0
-                    inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-                    inp.mi.time = 0
-                    inp.mi.dwExtraInfo = c_void_p(0)
-                    user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+                    # Throttle: skip move if cursor is already near target
+                    dx = state["x"] - self._last_move_x
+                    dy = state["y"] - self._last_move_y
+                    if dx * dx + dy * dy >= 9:  # 3px threshold
+                        abs_x, abs_y = self._get_absolute_coords(state["x"], state["y"])
+                        inp = INPUT_STRUCT()
+                        inp.type = INPUT_MOUSE
+                        inp.mi.dx = abs_x
+                        inp.mi.dy = abs_y
+                        inp.mi.mouseData = 0
+                        inp.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+                        inp.mi.time = 0
+                        inp.mi.dwExtraInfo = c_void_p(0)
+                        user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+                        self._last_move_x = state["x"]
+                        self._last_move_y = state["y"]
                     self.cursor_x, self.cursor_y = state["x"], state["y"]
                 elif not self.independent_mode and not is_primary:
                     self._restore_primary_cursor()
@@ -1102,16 +1118,8 @@ class MultiMouseManager:
 
     def _get_absolute_coords(self, x, y):
         """Convert screen coordinates to 0-65535 normalized range for SendInput."""
-        virt_x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
-        virt_y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-        virt_w = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
-        virt_h = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
-        if virt_w <= 0:
-            virt_w = user32.GetSystemMetrics(SM_CXSCREEN)
-        if virt_h <= 0:
-            virt_h = user32.GetSystemMetrics(SM_CYSCREEN)
-        abs_x = int(((x - virt_x) * 65535) / virt_w)
-        abs_y = int(((y - virt_y) * 65535) / virt_h)
+        abs_x = int(((x - self._virt_x) * 65535) / self._virt_w)
+        abs_y = int(((y - self._virt_y) * 65535) / self._virt_h)
         return max(0, min(abs_x, 65535)), max(0, min(abs_y, 65535))
 
     def _send_mouse_button(self, x, y, button_flag, is_down):
