@@ -985,8 +985,17 @@ class MultiMouseManager:
             if state["overlay"]:
                 state["overlay"].move(state["x"], state["y"])
 
+            # Check if this raw input event has a button transition
+            has_button_event = (
+                usButtonFlags & (
+                    RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_LEFT_BUTTON_UP |
+                    RI_MOUSE_RIGHT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_UP |
+                    RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_MIDDLE_BUTTON_UP
+                )
+            ) != 0
+
             cursor_moved = False
-            if held_dev is None:
+            if held_dev is None and not has_button_event:
                 primary_still = True
                 if self.primary_device and self.primary_device in self.mice:
                     pm = self.mice[self.primary_device]
@@ -998,11 +1007,13 @@ class MultiMouseManager:
                     cursor_moved = True
                 elif not self.independent_mode and not is_primary:
                     self._restore_primary_cursor()
-            elif held_dev == hdevice:
+            elif held_dev == hdevice and not has_button_event:
+                # Pure drag — no button transition in this event
                 user32.SetCursorPos(state["x"], state["y"])
                 self.cursor_x, self.cursor_y = state["x"], state["y"]
                 cursor_moved = True
-            # else: another device holds button — don't move
+            # else: button transition event — cursor positioning is handled
+            # by _send_mouse_button / _send_wheel, skip here to avoid delay.
 
             # Only sync overlay visibility when the cursor actually moved
             if cursor_moved:
@@ -1161,7 +1172,11 @@ class MultiMouseManager:
                 self._restore_primary_cursor()
 
         if is_right and not is_down:
-            self._restore_primary_cursor()
+            # Don't restore immediately — let the app process the
+            # WM_RBUTTONUP message and call GetCursorPos() first.
+            # Cursor will return to primary on next primary mouse movement.
+            self.cursor_x, self.cursor_y = x, y
+            self._sync_overlay_visibility()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
         """Send a mouse wheel event at the given position.
