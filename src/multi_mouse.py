@@ -1105,56 +1105,33 @@ class MultiMouseManager:
     def _send_mouse_button(self, x, y, button_flag, is_down):
         """Send a mouse click.
         
-        Uses SendInput absolute coordinates (atomic move+button in one
-        batch) for speed. After right-click UP the cursor is NOT restored
-        — it stays at the click position so GetCursorPos() returns the
-        correct location for context menus.
+        Uses SetCursorPos to physically position the cursor (visible to
+        GetCursorPos and hover popups), then SendInput for the button.
+        Right-click UP does not restore the cursor — it stays at the
+        click position so context menus get the correct location.
         """
-        abs_x, abs_y = self._get_absolute_coords(x, y)
         is_right = button_flag in (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
 
-        if is_down or is_right:
-            # 2-event batch: move + button
-            inputs = (INPUT_STRUCT * 2)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
-            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
-            self.cursor_x, self.cursor_y = x, y
-        else:
-            # Left-up: move+release in batch, then restore externally
-            inputs = (INPUT_STRUCT * 2)()
-            inputs[0].type = INPUT_MOUSE
-            inputs[0].mi.dx = abs_x
-            inputs[0].mi.dy = abs_y
-            inputs[0].mi.mouseData = 0
-            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-            inputs[0].mi.time = 0
-            inputs[0].mi.dwExtraInfo = c_void_p(0)
-            inputs[1].type = INPUT_MOUSE
-            inputs[1].mi.dx = 0
-            inputs[1].mi.dy = 0
-            inputs[1].mi.mouseData = 0
-            inputs[1].mi.dwFlags = button_flag
-            inputs[1].mi.time = 0
-            inputs[1].mi.dwExtraInfo = c_void_p(0)
-            user32.SendInput(2, byref(inputs), sizeof(INPUT_STRUCT))
-            self._restore_primary_cursor()
+        # Physically move cursor — ensures GetCursorPos() and hover
+        # popups see the correct position
+        user32.SetCursorPos(int(x), int(y))
+        self.cursor_x, self.cursor_y = x, y
 
-        if is_right and not is_down:
-            # Cursor stays at click position — next primary movement
-            # will bring it back. Sync overlay after position change.
+        inp = INPUT_STRUCT()
+        inp.type = INPUT_MOUSE
+        inp.mi.dx = 0
+        inp.mi.dy = 0
+        inp.mi.mouseData = 0
+        inp.mi.dwFlags = button_flag
+        inp.mi.time = 0
+        inp.mi.dwExtraInfo = c_void_p(0)
+        user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
+
+        if not is_down and not is_right:
+            # Left-up: restore cursor to primary
+            self._restore_primary_cursor()
+        elif is_right and not is_down:
+            # Right-up: leave cursor at click position for context menu
             self._sync_overlay_visibility()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
