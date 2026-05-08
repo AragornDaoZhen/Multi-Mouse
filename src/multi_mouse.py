@@ -1221,51 +1221,61 @@ class MultiMouseManager:
             self._sync_overlay_visibility()
 
     def _send_wheel(self, x, y, delta, horizontal=False):
-        """Send a mouse wheel event at the given position via SendInput.
-        
-        Uses a 3-event atomic batch (move + wheel + restore) so the
-        cursor doesn't visibly jump between windows, which causes
-        choppy scrolling when the two mice are on different apps.
-        """
+        """Send a mouse wheel event at the given position via SendInput."""
+        held_dev = self._find_button_held_device()
         abs_x, abs_y = self._get_absolute_coords(x, y)
 
-        if self.primary_device and self.primary_device in self.mice:
-            pm = self.mice[self.primary_device]
-            restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
+        if held_dev is None:
+            # No button held: atomic 3-event batch with restore to primary
+            if self.primary_device and self.primary_device in self.mice:
+                pm = self.mice[self.primary_device]
+                restore_x, restore_y = self._get_absolute_coords(pm["x"], pm["y"])
+            else:
+                restore_x, restore_y = abs_x, abs_y
+
+            inputs = (INPUT_STRUCT * 3)()
+            inputs[0].type = INPUT_MOUSE
+            inputs[0].mi.dx = abs_x
+            inputs[0].mi.dy = abs_y
+            inputs[0].mi.mouseData = 0
+            inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+            inputs[0].mi.time = 0
+            inputs[0].mi.dwExtraInfo = c_void_p(0)
+
+            inputs[1].type = INPUT_MOUSE
+            inputs[1].mi.dx = 0
+            inputs[1].mi.dy = 0
+            inputs[1].mi.mouseData = delta
+            inputs[1].mi.dwFlags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
+            inputs[1].mi.time = 0
+            inputs[1].mi.dwExtraInfo = c_void_p(0)
+
+            inputs[2].type = INPUT_MOUSE
+            inputs[2].mi.dx = restore_x
+            inputs[2].mi.dy = restore_y
+            inputs[2].mi.mouseData = 0
+            inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+            inputs[2].mi.time = 0
+            inputs[2].mi.dwExtraInfo = c_void_p(0)
+
+            user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
+            if self.primary_device and self.primary_device in self.mice:
+                pm = self.mice[self.primary_device]
+                self.cursor_x, self.cursor_y = pm["x"], pm["y"]
+            else:
+                self.cursor_x, self.cursor_y = x, y
         else:
-            restore_x, restore_y = abs_x, abs_y
-
-        inputs = (INPUT_STRUCT * 3)()
-        inputs[0].type = INPUT_MOUSE
-        inputs[0].mi.dx = abs_x
-        inputs[0].mi.dy = abs_y
-        inputs[0].mi.mouseData = 0
-        inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-        inputs[0].mi.time = 0
-        inputs[0].mi.dwExtraInfo = c_void_p(0)
-
-        inputs[1].type = INPUT_MOUSE
-        inputs[1].mi.dx = 0
-        inputs[1].mi.dy = 0
-        inputs[1].mi.mouseData = delta
-        inputs[1].mi.dwFlags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
-        inputs[1].mi.time = 0
-        inputs[1].mi.dwExtraInfo = c_void_p(0)
-
-        inputs[2].type = INPUT_MOUSE
-        inputs[2].mi.dx = restore_x
-        inputs[2].mi.dy = restore_y
-        inputs[2].mi.mouseData = 0
-        inputs[2].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
-        inputs[2].mi.time = 0
-        inputs[2].mi.dwExtraInfo = c_void_p(0)
-
-        user32.SendInput(3, byref(inputs), sizeof(INPUT_STRUCT))
-        if self.primary_device and self.primary_device in self.mice:
-            pm = self.mice[self.primary_device]
-            self.cursor_x, self.cursor_y = pm["x"], pm["y"]
-        else:
-            self.cursor_x, self.cursor_y = x, y
+            # During drag: only send wheel at current cursor position.
+            # No move/restore — would create accidental drag toward primary.
+            inp = INPUT_STRUCT()
+            inp.type = INPUT_MOUSE
+            inp.mi.dx = 0
+            inp.mi.dy = 0
+            inp.mi.mouseData = delta
+            inp.mi.dwFlags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
+            inp.mi.time = 0
+            inp.mi.dwExtraInfo = c_void_p(0)
+            user32.SendInput(1, byref(inp), sizeof(INPUT_STRUCT))
 
     def _find_button_held_device(self):
         """Return the device handle of the mouse that currently has a button held, or None."""
